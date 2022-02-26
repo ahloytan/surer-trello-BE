@@ -175,5 +175,362 @@ class Test(Resource):
             return "Error", 400
 
 
+# ----- Create Task ----- #
+# create_task_parser = api.parser()
+# create_task_parser.add_argument("project_id", help="Project ID")
+# create_task_parser.add_argument("description", help="Description of task")
+# create_task_parser.add_argument("position", type= int, help="Position of task")
+# create_task_parser.add_argument("deadline", help="deadline for task")
+# create_task_parser.add_argument("completion_status", help="Task's completion status (not started/started/completed)")
+user_fields = api.model('UserInfo', {
+    'fname': fields.String,
+    'lname': fields.String,
+    "user_email": fields.String
+})
+create_task_model = api.model("create_task_model",{
+    'task_id': fields.Integer(description="Task ID", required=True),
+    'project_id': fields.Integer(description="Project ID", required=True),
+    'title': fields.String(description="Title of task", required=True),
+    'description': fields.String(description="Description of task"),
+    'position': fields.Integer(description="Position of task", required=True),
+    'deadline': fields.DateTime(description="Deadline of task"),
+    'completion_status': fields.String(description="Status of task", required=True),
+    'assignees': fields.List(fields.Nested(user_fields)),
+})
+
+@api.route("/create_task")
+@api.doc(description="Create Task")
+class CreateTask(Resource):
+    @api.expect(create_task_model)
+    def post(self):
+        data = request.get_json()
+        data = json.loads(json.dumps(data))
+        project_id = data["project_id"]
+        title = data["title"]
+        description = data["description"]
+        position = data["position"]
+        created_datetime = datetime.now(tz=None)
+        deadline = data["deadline"]
+        print(deadline)
+        print(type(deadline))
+        if deadline is not None:
+            deadline = datetime.strptime(deadline, "%Y-%m-%dT%H:%M:%S.%fZ")
+            deadline = deadline + timedelta(hours=8)
+        if description is None:
+            description = "<No description entered>"
+        completion_status = data["completion_status"]
+        assignees = data["assignees"]
+        new_task = Task(project_id, title,description, position, created_datetime, deadline, completion_status)
+        try:
+            db.session.add(new_task)
+            db.session.commit()
+
+            for assignee in assignees:
+                new_assignees = Assignee(new_task.task_id, project_id, assignee["user_email"], assignee["fname"], assignee["lname"])
+                db.session.add(new_assignees)
+            db.session.commit()
+            response = {
+                **new_task.as_dict(),
+                "assignees": assignees,
+            }
+            return json.loads(json.dumps(response, default=str)), 200
+
+        except Exception as e:
+            print(e)
+            error_str = traceback.format_exc()
+            return json.loads(json.dumps({"error": "Unable to create task"}, default=default)), 500
+
+# ----- Get Task By Task ID ----- #
+get_task_parser = api.parser()
+get_task_parser.add_argument("task_id", help="Enter task ID")
+@api.route("/get_task")
+@api.doc(description="Get task")
+class GetTask(Resource):
+    @api.expect(get_task_parser)
+    def get(self):
+        task_id = get_task_parser.parse_args().get("task_id")
+        task_info = {}
+        task_info[task_id] = {}
+        for task in Task.query.filter_by(task_id=task_id):
+            task_info[task_id]["project_id"] = task.json()["project_id"]
+            task_info[task_id]["description"] = task.json()["description"]
+            task_info[task_id]["position"] = task.json()["position"]
+            task_info[task_id]["title"] = task.json()["title"]
+            task_info[task_id]["completion_status"] = task.json()["completion_status"]
+            created_datetime = task.json()["created_datetime"].strftime("%Y-%m-%d")
+            print(task.json()["deadline"])
+            if task.json()["deadline"] is None:
+                deadline="<No due date entered>"
+            else:
+                deadline = task.json()["deadline"].strftime("%Y-%m-%d")
+            task_info[task_id]["created_datetime"] = created_datetime
+            task_info[task_id]["deadline"] = deadline
+        if task_info != {}:
+            return task_info, 200
+        else:
+            return "Failed", 400
+
+# ----- Get Task By Project ID ----- #
+get_task_by_project_parser = api.parser()
+get_task_by_project_parser.add_argument("project_id", help="Enter project ID")
+@api.route("/get_task_by_projectid")
+@api.doc(description="Get list of tasks by project (project id)")
+class GetTaskByProject(Resource):
+    @api.expect(get_task_by_project_parser)
+    def get(self):
+        project_id = get_task_by_project_parser.parse_args().get("project_id")
+        user = request.user
+        todo = []
+        inprogress = []
+        completed = []
+        try:
+            user_projects = Team.query.get((user, project_id))
+            if user_projects is None:
+                return json.loads(json.dumps({"error": "Unauthorized request"}, default=default)), 403
+
+            tasks = Task.query.order_by(Task.position.asc()).filter_by(project_id=project_id).all()
+            for task in tasks:
+                task = task.as_dict()
+                assignees = Assignee.query.filter_by(task_id=task["task_id"]).all()
+                all_assignees = []
+                for assignee in assignees:
+                    assignee = assignee.as_dict()
+                    del assignee["project_id"]
+                    del assignee["task_id"]
+                    all_assignees.append(assignee)
+                task["assignees"] = all_assignees
+
+                if task["completion_status"] == "not started":
+                    todo.append(task)
+                elif task["completion_status"] == "started":
+                    inprogress.append(task)
+                elif task["completion_status"] == "completed":
+                    completed.append(task)
+                else:
+                    raise Exception("Invalid completion_status")
+            return json.loads(json.dumps({
+                "tasks": {
+                    "todo": todo,
+                    "inprogress": inprogress,
+                    "completed": completed,
+                }
+            }, default=str)), 200
+        except Exception as e:
+            print(e)
+            return json.loads(json.dumps({"error": "Unable to retrieve tasks"}, default=default)), 500
+
+task_model = api.model("task_model", {
+    'project_id': fields.Integer(description="Project ID", required=True),
+    'task_id': fields.Integer(description="Task ID", required=True),
+    'title': fields.String(description="Title of task", required=True),
+    'description': fields.String(description="Description of task"),
+    'position': fields.Integer(description="Position of task", required=True),
+    'deadline': fields.DateTime(description="Deadline of task"),
+    'completion_status': fields.String(description="Status of task", required=True),
+    'assignees': fields.List(fields.Nested(user_fields)),
+})
+
+
+# ----- Get user's task and team with user email ----- #
+get_task_by_user_parser = api.parser()
+get_task_by_user_parser.add_argument("email", help="Email of user")
+@api.route("/get_team_and_task")
+@api.doc(description="Get user's list of tasks for each project")
+class GetTeamAndTask(Resource):
+    @api.expect(get_task_by_user_parser)
+    def get(self):
+        email = get_task_by_user_parser.parse_args().get("email")
+        team_task_dict = {}
+        user_projects = Team.query.filter_by(user_email=email).all()
+        for proj in user_projects:
+            team_task_dict[int(proj.project_id)] = []
+        tasks_from_user = Assignee.query.filter_by(user_email=email)
+        for pid in team_task_dict.keys():
+            for task in tasks_from_user:
+                if int(task.project_id) == pid:
+                    team_task_dict[pid].append(task.task_id)
+
+        return team_task_dict, 200
+
+# ------ Get user's projects and project_name --------
+get_user_project_names = api.parser()
+get_user_project_names.add_argument("email", help="Email of user")
+@api.route("/get_user_project_names")
+@api.doc(description="Get user's list of tasks for each project")
+class getUserProjectNames(Resource):
+    @api.expect(get_user_project_names)
+    def get(self):
+        email = get_task_by_user_parser.parse_args().get("email")
+        user_projects_dict = {}
+        user_projects = Team.query.filter_by(user_email=email).all()
+        for proj in user_projects:
+            user_projects_dict[int(proj.project_id)] = ""
+        for pid in user_projects_dict.keys():
+            p = Project.query.filter_by(project_id=pid).all()[0]
+            user_projects_dict[pid] = p.description
+        return user_projects_dict, 200
+
+
+# ----- Update Task ----- #
+@api.route("/update_task")
+@api.doc(description="Update task)")
+class UpdateTask(Resource):
+    @api.expect(create_task_model)
+    def patch(self):
+        data = request.get_json()
+        data = json.loads(json.dumps(data))
+        task_id = data["task_id"]
+
+        try:
+            task = Task.query.get(task_id)
+            original_deadline = task.deadline
+            new_deadline = data["deadline"]
+            new_deadline_string = new_deadline.split("T")[0].strip()
+            new_deadline = datetime.strptime(new_deadline, "%Y-%m-%dT%H:%M:%S.%fZ")
+            new_deadline = new_deadline + timedelta(hours=8)
+            original_deadline = str(original_deadline).split(" ")[0]
+            original_deadline_string = original_deadline
+            if task:
+                task.description = data["description"]
+                task.title = data["title"]
+                task.deadline = new_deadline
+                updated_assignees = data["assignees"]
+                current_assignees = Assignee.query.filter_by(task_id=task_id).all()
+                current_assignees = [assignee.as_dict()["user_email"] for assignee in current_assignees]
+                # add new assignees
+                for assignee in updated_assignees:
+                    if assignee["user_email"] not in current_assignees:
+                        new_assignee = Assignee(task_id, data["project_id"], assignee["user_email"], assignee["fname"], assignee["lname"])
+                        db.session.add(new_assignee)
+                # delete assignees who are unassigned
+                updated_assignees = [assignee["user_email"] for assignee in updated_assignees]
+                print(updated_assignees)
+                for current_assignee in current_assignees:
+                    if current_assignee not in updated_assignees:
+                        Assignee.query.filter_by(task_id=task_id).filter_by(user_email=current_assignee).delete()
+                db.session.commit()
+                new_deadline = str(original_deadline).split(" ")[0]
+                if original_deadline != new_deadline_string:
+                    for new_assignee_email in updated_assignees:
+                        data = {
+                        'Messages': [
+                                {
+                                "From": {
+                                    "Email": "taskucci@gmail.com",
+                                    "Name": "Taskucci"
+                                },
+                                "To": [
+                                    {
+                                    "Email": f"{new_assignee_email}",
+                                    "Name": f"{new_assignee_email}"
+                                    }
+                                ],
+                                "Subject": f"{task.title}: Task Deadline Updated",
+                                "TextPart": "Thank you for using Taskucci project management board - where efficiency meets usability",
+                                "HTMLPart": f"Dear {new_assignee_email},<br><br> Please check your Taskucci application to view updated task deadline for {task.title}. Thank you!",
+                                "CustomID": "Task deadline updated"
+                                }
+                            ]
+                        }
+                        result = mailjet.send.create(data=data)
+                        print(result)
+                return json.loads(json.dumps({"message":"success"}, default=default)), 200
+            else:
+                return json.loads(json.dumps({"error": f"Task {task_id} does not exist"}, default=default)), 400
+        except Exception as e:
+            print(e)
+            return json.loads(json.dumps({"error": "Unable to update tasks"}, default=default)), 500
+
+# ----- Update Task Position ----- #
+task_position_model = api.model("task_position_model", {
+    'project_id': fields.Integer(description="Project ID", required=True),
+    'task_id': fields.Integer(description="Task ID", required=True),
+    'new_position': fields.Integer(description="New position of task", required=True),
+    # 'old_position': fields.Integer(description="Old position of task", required=True),
+    'new_status': fields.String(description="Status of task", required=True),
+})
+
+@api.route("/update_task_position")
+@api.doc(description="Update task position)")
+class UpdateTaskPosition(Resource):
+    @api.expect(task_position_model)
+    def patch(self):
+        data = request.get_json()
+        data = json.loads(json.dumps(data))
+        task_id = data["task_id"]
+        project_id = data["project_id"]
+        new_position = data["new_position"]
+        new_status = data["new_status"]
+
+        try:
+            task = Task.query.get(task_id)
+
+            old_position = task.position
+            if task.completion_status == new_status:
+                selected_tasks = Task.query.order_by(Task.position.asc()).filter_by(project_id=project_id).filter_by(completion_status=new_status).all()
+
+                if old_position > new_position:
+                    for i in range(new_position, old_position):
+                        current_task = Task.query.get(selected_tasks[i].task_id)
+                        selected_tasks[i].position = selected_tasks[i].position + 1
+                else:
+                    for i in range(old_position+1, new_position+1):
+                        selected_tasks[i].position = selected_tasks[i].position - 1
+
+                task.position = new_position
+            else:
+                # get tasks with old status
+                old_status = task.completion_status
+                old_status_tasks = Task.query.order_by(Task.position.asc()).filter_by(project_id=project_id).filter_by(completion_status=old_status).all()
+                for i in range(old_position+1, len(old_status_tasks)):
+                    old_status_tasks[i].position = old_status_tasks[i].position - 1
+
+                # get tasks with new status
+                new_status_tasks = Task.query.order_by(Task.position.asc()).filter_by(project_id=project_id).filter_by(completion_status=new_status).all()
+                for i in range(new_position, len(new_status_tasks)):
+                    new_status_tasks[i].position = new_status_tasks[i].position + 1
+
+                # change status of task to new status
+                task.position = new_position
+                task.completion_status = new_status
+            db.session.commit()
+            return json.loads(json.dumps({"message": "success"}, default=default)), 200
+
+        except Exception as e:
+            print(e)
+            return json.loads(json.dumps({"error": "Unable to update tasks"}, default=default)), 500
+
+# ----- Delete Task  ----- #
+delete_task_parser = api.parser()
+delete_task_parser.add_argument("task_id", help="Enter task ID")
+@api.route("/delete_task")
+@api.doc(description="Delete task")
+class DeleteTask(Resource):
+    @api.expect(delete_task_parser)
+    def delete(self):
+        task_id = delete_task_parser.parse_args().get("task_id")
+
+        try:
+            task = Task.query.get(task_id)
+            task_position = task.position
+            status = task.completion_status
+            project_id = task.project_id
+
+            tasks = Task.query.order_by(Task.position.asc()).filter_by(project_id=project_id).filter_by(completion_status=status).all()
+            for i in range(task_position+1, len(tasks)):
+                tasks[i].position = tasks[i].position - 1
+            Assignee.query.filter_by(task_id=task_id).delete()
+            Task.query.filter_by(task_id=task_id).delete()
+
+            db.session.commit()
+            return json.loads(json.dumps({"message":"success"}, default=default)), 200
+        except Exception as e:
+            print(e)
+            return json.loads(json.dumps({"error":"Unable to delete task"}, default=default)), 500
+
+
+
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
