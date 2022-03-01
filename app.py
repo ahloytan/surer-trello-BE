@@ -66,12 +66,14 @@ class Project(db.Model):
     project_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     creator = db.Column(db.String(256), nullable=False)
     description = db.Column(db.String(1000), nullable=False)
+    details = db.Column(db.String(1000), nullable=False)
     created_at = db.Column(db.DateTime, nullable=True)
     last_modified = db.Column(db.DateTime, nullable=False)
 
     def __init__(self, creator, description, created_at, last_modified):
         self.creator = creator
         self.description = description
+        self.details = details
         self.created_at = created_at
         self.last_modified = last_modified
 
@@ -599,36 +601,6 @@ class CreateTask(Resource):
             error_str = traceback.format_exc()
             return json.loads(json.dumps({"error": "Unable to create task"}, default=default)), 500
 
-# ----- Get Task By Task ID ----- #
-get_task_parser = api.parser()
-get_task_parser.add_argument("task_id", help="Enter task ID")
-@api.route("/get_task")
-@api.doc(description="Get task")
-class GetTask(Resource):
-    @api.expect(get_task_parser)
-    def get(self):
-        task_id = get_task_parser.parse_args().get("task_id")
-        task_info = {}
-        task_info[task_id] = {}
-        for task in Task.query.filter_by(task_id=task_id):
-            task_info[task_id]["project_id"] = task.json()["project_id"]
-            task_info[task_id]["description"] = task.json()["description"]
-            task_info[task_id]["position"] = task.json()["position"]
-            task_info[task_id]["title"] = task.json()["title"]
-            task_info[task_id]["completion_status"] = task.json()["completion_status"]
-            created_datetime = task.json()["created_datetime"].strftime("%Y-%m-%d")
-            print(task.json()["deadline"])
-            if task.json()["deadline"] is None:
-                deadline="<No due date entered>"
-            else:
-                deadline = task.json()["deadline"].strftime("%Y-%m-%d")
-            task_info[task_id]["created_datetime"] = created_datetime
-            task_info[task_id]["deadline"] = deadline
-        if task_info != {}:
-            return task_info, 200
-        else:
-            return "Failed", 400
-
 # ----- Get Task By Project ID ----- #
 get_task_by_project_parser = api.parser()
 get_task_by_project_parser.add_argument("project_id", help="Enter project ID")
@@ -688,46 +660,6 @@ task_model = api.model("task_model", {
     'completion_status': fields.String(description="Status of task", required=True),
     'assignees': fields.List(fields.Nested(user_fields)),
 })
-
-
-# ----- Get user's task and team with user email ----- #
-get_task_by_user_parser = api.parser()
-get_task_by_user_parser.add_argument("email", help="Email of user")
-@api.route("/get_team_and_task")
-@api.doc(description="Get user's list of tasks for each project")
-class GetTeamAndTask(Resource):
-    @api.expect(get_task_by_user_parser)
-    def get(self):
-        email = get_task_by_user_parser.parse_args().get("email")
-        team_task_dict = {}
-        user_projects = Team.query.filter_by(user_email=email).all()
-        for proj in user_projects:
-            team_task_dict[int(proj.project_id)] = []
-        tasks_from_user = Assignee.query.filter_by(user_email=email)
-        for pid in team_task_dict.keys():
-            for task in tasks_from_user:
-                if int(task.project_id) == pid:
-                    team_task_dict[pid].append(task.task_id)
-
-        return team_task_dict, 200
-
-# ------ Get user's projects and project_name --------
-get_user_project_names = api.parser()
-get_user_project_names.add_argument("email", help="Email of user")
-@api.route("/get_user_project_names")
-@api.doc(description="Get user's list of tasks for each project")
-class getUserProjectNames(Resource):
-    @api.expect(get_user_project_names)
-    def get(self):
-        email = get_task_by_user_parser.parse_args().get("email")
-        user_projects_dict = {}
-        user_projects = Team.query.filter_by(user_email=email).all()
-        for proj in user_projects:
-            user_projects_dict[int(proj.project_id)] = ""
-        for pid in user_projects_dict.keys():
-            p = Project.query.filter_by(project_id=pid).all()[0]
-            user_projects_dict[pid] = p.description
-        return user_projects_dict, 200
 
 
 # ----- Update Task ----- #
@@ -791,8 +723,6 @@ class UpdateTask(Resource):
                                 }
                             ]
                         }
-                        result = mailjet.send.create(data=data)
-                        print(result)
                 return json.loads(json.dumps({"message":"success"}, default=default)), 200
             else:
                 return json.loads(json.dumps({"error": f"Task {task_id} does not exist"}, default=default)), 400
@@ -1000,7 +930,6 @@ class Dashboard(Resource):
             return json.loads(json.dumps({"error": "Something went wrong while retrieving dashboard"}, default=str)), 500
 
 # ----- END DASHBOARD ----- #
-
 @app.before_request
 def before_request_func():
     session_id = request.cookies.get('SESSION_ID')
