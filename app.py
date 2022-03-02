@@ -535,6 +535,31 @@ class GetProjectByID(Resource):
             return json.loads(json.dumps({"error": "Unable to retrieve project"}, default=default)), 500
 
 
+change_proj_details_parser = api.parser()
+change_proj_details_parser.add_argument("project_id", help="Reference project id")
+change_proj_details_parser.add_argument("description", help="Change code name")
+change_proj_details_parser.add_argument("details", help="Change details")
+@api.route("/change_proj_details")
+@api.doc(description="Change Project Details")
+class ChangeProjectDetails(Resource):
+    @api.expect(change_proj_details_parser)
+    def get(self):
+        proj_id = change_proj_details_parser.parse_args().get("project_id")
+        description = change_proj_details_parser.parse_args().get("description")
+        details = change_proj_details_parser.parse_args().get("details")
+        try:
+            proj = Project.query.get((proj_id))
+            print(proj.description, proj.details)
+            print(description, details)
+            proj.description = description
+            proj.details= details
+            db.session.commit()
+
+            return json.loads(json.dumps({'name' : proj.description, 'desc' : proj.details}, default=str)), 200
+        except Exception as e:
+            print(e)
+            return json.loads(json.dumps({"error": "Unable to retrieve project details"}, default=default)), 500
+
 # ==================== TASK FUNCTIONS ====================#
 # ----- Create Task ----- #
 # create_task_parser = api.parser()
